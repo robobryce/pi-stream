@@ -4,6 +4,7 @@
 //
 // This exercises the production fs.writeSync(1, ...) path against real fd 1 —
 // the same channel the harness reserves for stdout — with no LLM.
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +12,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const mod = await import(path.join(here, "..", "src", "extension.ts"));
 const register = mod.default;
 
-const scenario = JSON.parse(process.argv[2] ?? "{}");
+// Scenario comes from a file (argv[3] === "--file") to avoid argv size limits on
+// large stress scenarios, or inline via argv[2] for small ones.
+const scenario = process.argv[3] === "--file"
+	? JSON.parse(fs.readFileSync(process.argv[2], "utf-8"))
+	: JSON.parse(process.argv[2] ?? "{}");
 const { hasUI = false, mode = "print", flag = true, events = [] } = scenario;
 
 const handlers = new Map();
