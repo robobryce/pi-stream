@@ -5,6 +5,9 @@
   "author": "Bryce Adelstein Lelbach",
   "license": "MIT",
   "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/robobryce/pi-stream.git"
