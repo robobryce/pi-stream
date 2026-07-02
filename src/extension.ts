@@ -1,31 +1,36 @@
 /**
  * pi-stream — a `--stream` CLI flag.
  *
- * `pi --stream "your prompt"` runs the turn non-interactively and streams it as
- * it plays out — thinking deltas, text deltas, and tool activity — as plain
+ * `pi -p "your prompt" --stream` runs the turn non-interactively and streams it
+ * as it plays out — thinking deltas, text deltas, and tool activity — as plain
  * text with no TUI and no JSON envelope. It's the flag form of the standalone
  * pi-stream.mjs runner.
  *
- * How it works
- * ------------
- * The flag is only meaningful in a non-interactive run (`ctx.hasUI === false`,
- * i.e. print/json mode — which is also what you get whenever stdout is not a
- * TTY). In interactive mode the TUI already renders the turn, so the flag is a
- * no-op and we leave the terminal alone.
+ * Invocation / flag parsing
+ * -------------------------
+ * Pi's arg parser runs before extensions load and doesn't know flag types, so a
+ * bare `--stream` immediately followed by the prompt greedily consumes it:
+ * `pi --stream "hi"` parses as `--stream="hi"` and leaves NO prompt for the
+ * turn. So put the prompt BEFORE the flag (or use `=`), e.g.:
+ *   pi -p "your prompt" --stream          ← recommended
+ *   pi -p --stream=true "your prompt"
+ *   pi "your prompt" --stream             ← non-TTY stdout ⇒ print mode
+ * If `--stream` swallowed the prompt (flag-first with a space), we can't recover
+ * it from an extension, so we print a one-line usage hint instead of running an
+ * empty turn.
  *
- * When active we render the live stream ourselves from the session event
- * stream. In plain print mode (`ctx.mode === "print"`) the harness would also
- * echo the final assistant text after the turn, which would duplicate what we
- * already streamed; we suppress that echo by clearing the text blocks of the
- * finalized assistant message in `message_end` (the streamed text is the
- * output of record). Runs launched with `--stream` are transient viewing
- * sessions, so trimming the echoed copy from the transcript is the right
- * trade-off; pass `--no-session` if you want nothing written at all.
- *
- * In JSON mode (`ctx.mode === "json"`) the harness emits its own JSON event
- * stream and there is no final text echo, so we stay out of the way entirely.
+ * Behavior
+ * --------
+ * Active only in a non-interactive run (`!ctx.hasUI` — print/json mode, or any
+ * run whose stdout is not a TTY). In interactive mode the TUI renders the turn,
+ * so the flag is a no-op. When active we render the live stream from the
+ * session event stream. In plain print mode the harness also echoes the final
+ * assistant text after the turn, duplicating what we streamed, so we strip text
+ * blocks from the finalized message in `message_end`. JSON mode emits its own
+ * machine stream and does no text echo, so we leave it alone.
  */
 
+import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const DIM = "\x1b[2m";
@@ -34,32 +39,56 @@ const RESET = "\x1b[0m";
 
 const FLAG = "stream";
 
+/**
+ * Whether --stream is on. Boolean flag, so normally `true`. Pi's arg parser can
+ * also hand a boolean flag a stringy value in some orderings, so accept the
+ * common truthy strings too — anything other than an explicit off counts as on.
+ */
+function flagOn(value: unknown): boolean {
+	if (value === true) return true;
+	if (typeof value === "string") {
+		const v = value.trim().toLowerCase();
+		return v !== "" && v !== "false" && v !== "0" && v !== "no";
+	}
+	return false;
+}
+
 export default function registerStreamExtension(pi: ExtensionAPI): void {
 	pi.registerFlag(FLAG, {
-		description: "Stream the turn (thinking, text, tool activity) to stdout as plain text; non-interactive only.",
+		description: "Stream the turn (thinking, text, tool activity) to stdout as plain text; non-interactive only. Put the prompt before the flag: pi -p \"your prompt\" --stream.",
 		type: "boolean",
 		default: false,
 	});
 
-	// Resolved once the session context is known. Streaming is only enabled for
-	// a non-interactive run with the flag set.
 	let active = false;
-	// Whether the harness will echo the final assistant text after the turn
-	// (plain print/text mode only) — if so we suppress it to avoid duplication.
 	let suppressFinalEcho = false;
 	let inThinking = false;
 	let wroteAnything = false;
 
+	// Write straight to file descriptor 1 (real stdout). In print/json mode the
+	// harness takes over `process.stdout.write` and redirects it to stderr,
+	// reserving true stdout for its own guarded writer; writing to fd 1 directly
+	// bypasses that takeover so our stream lands on real stdout. Shell/pipe
+	// redirection is at the fd level, so `pi ... --stream > file` still works.
 	const out = (s: string) => {
-		process.stdout.write(s);
+		try {
+			fs.writeSync(1, s);
+		} catch {
+			// If fd 1 is unavailable (closed/EPIPE), fall back to process.stdout.
+			process.stdout.write(s);
+		}
 		wroteAnything = true;
 	};
 
+	const endThinkingIfOpen = () => {
+		if (inThinking) {
+			out(RESET);
+			inThinking = false;
+		}
+	};
+
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
-		active = pi.getFlag(FLAG) === true && !ctx.hasUI;
-		// hasUI is false for both print and json modes; only plain print ("print")
-		// echoes the final text that we need to suppress. json mode emits its own
-		// event stream and does no text echo, so leave it alone.
+		active = flagOn(pi.getFlag(FLAG)) && !ctx.hasUI;
 		suppressFinalEcho = active && ctx.mode === "print";
 		inThinking = false;
 		wroteAnything = false;
@@ -81,10 +110,7 @@ export default function registerStreamExtension(pi: ExtensionAPI): void {
 				inThinking = false;
 				break;
 			case "text_start":
-				if (inThinking) {
-					out(RESET);
-					inThinking = false;
-				}
+				endThinkingIfOpen();
 				out("\n");
 				break;
 			case "text_delta":
@@ -97,10 +123,7 @@ export default function registerStreamExtension(pi: ExtensionAPI): void {
 
 	pi.on("tool_execution_start", (event) => {
 		if (!active) return;
-		if (inThinking) {
-			out(RESET);
-			inThinking = false;
-		}
+		endThinkingIfOpen();
 		let args = "";
 		try {
 			args = JSON.stringify(event.args);
@@ -126,7 +149,6 @@ export default function registerStreamExtension(pi: ExtensionAPI): void {
 		const content = message.content as Array<{ type: string }>;
 		const hasText = content.some((c) => c.type === "text");
 		if (!hasText) return;
-		// Terminate the streamed line cleanly before the process exits.
 		if (wroteAnything) out("\n");
 		return {
 			message: {
