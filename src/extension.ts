@@ -53,6 +53,32 @@ function flagOn(value: unknown): boolean {
 	return false;
 }
 
+/**
+ * Detect the flag-first mistake `pi --stream "prompt"`, where Pi's arg parser
+ * (which runs before extensions and doesn't know flag types) consumes the bare
+ * word after `--stream` and leaves NO prompt for the turn — the process then
+ * starts no turn and exits immediately with no output.
+ *
+ * The tell is in argv: a `--stream` token immediately followed by a non-flag
+ * word (the swallowed prompt). The recommended forms don't match: `pi -p
+ * "prompt" --stream` has `--stream` followed by another flag (or end of args),
+ * and piped stdin puts no prompt after the flag either. Returns the swallowed
+ * prompt when detected, else undefined.
+ */
+export function swallowedPrompt(argv: readonly string[]): string | undefined {
+	for (let i = 0; i < argv.length; i++) {
+		const tok = argv[i];
+		if (tok === `--${FLAG}`) {
+			const next = argv[i + 1];
+			if (next !== undefined && !next.startsWith("-")) return next;
+			return undefined;
+		}
+		// `--stream=value` never swallows a following positional.
+		if (tok.startsWith(`--${FLAG}=`)) return undefined;
+	}
+	return undefined;
+}
+
 export default function registerStreamExtension(pi: ExtensionAPI): void {
 	pi.registerFlag(FLAG, {
 		description: "Stream the turn (thinking, text, tool activity) to stdout as plain text; non-interactive only. Put the prompt before the flag: pi -p \"your prompt\" --stream.",
@@ -92,6 +118,20 @@ export default function registerStreamExtension(pi: ExtensionAPI): void {
 		suppressFinalEcho = active && ctx.mode === "print";
 		inThinking = false;
 		wroteAnything = false;
+
+		// If `--stream` swallowed the prompt (flag-first with a space), the turn has
+		// nothing to run and Pi exits immediately with no output. We can't recover
+		// the prompt from an extension, but we can turn a silent no-op exit into a
+		// one-line usage hint so the mistake is obvious.
+		if (active) {
+			const eaten = swallowedPrompt(process.argv.slice(2));
+			if (eaten !== undefined) {
+				out(
+					`${DIM}pi-stream: \`--stream\` consumed "${eaten}" as its value, leaving no prompt to run.\n` +
+					`Put the prompt BEFORE the flag: pi -p "${eaten}" --stream${RESET}\n`,
+				);
+			}
+		}
 	});
 
 	pi.on("message_update", (event) => {
