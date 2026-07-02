@@ -1,0 +1,51 @@
+{
+  "name": "pi-stream",
+  "version": "0.1.0",
+  "description": "Pi extension adding a --stream flag: run non-interactively and stream the turn (thinking, text, and tool activity) to stdout as it happens — no TUI, no JSON.",
+  "author": "Bryce Adelstein Lelbach",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robobryce/pi-stream.git"
+  },
+  "homepage": "https://github.com/robobryce/pi-stream#readme",
+  "bugs": {
+    "url": "https://github.com/robobryce/pi-stream/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "stream",
+    "cli"
+  ],
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-agent-core": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
