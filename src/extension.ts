@@ -65,6 +65,48 @@ function flagOn(value: unknown): boolean {
  * and piped stdin puts no prompt after the flag either. Returns the swallowed
  * prompt when detected, else undefined.
  */
+/** Max recovery retries when the swallowed-prompt turn fails empty/transient. */
+const RECOVERY_MAX_RETRIES = 3;
+const RECOVERY_BASE_DELAY_MS = 2000;
+
+interface TurnMessage {
+	role: string;
+	content?: Array<{ type: string; text?: string }>;
+	stopReason?: string | null;
+	errorMessage?: string | null;
+	usage?: { totalTokens?: number; output?: number };
+}
+
+/**
+ * Whether a recovered turn should be retried: an empty response, or a transient
+ * (retryable) error. This matters specifically for the swallowed-prompt path,
+ * which drives the turn via sendUserMessage from session_start and therefore
+ * does NOT go through Pi's normal print-mode retry loop — so a 429/5xx or empty
+ * response on that turn would otherwise end the run silently.
+ */
+export function shouldRetryRecoveredTurn(msg: TurnMessage | undefined): boolean {
+	if (!msg || msg.role !== "assistant") return false;
+	const content = Array.isArray(msg.content) ? msg.content : [];
+	const hasToolCall = content.some((c) => c.type === "toolCall" || c.type === "tool_use");
+	const hasText = content.some((c) => c.type === "text" && (c.text ?? "").trim().length > 0);
+
+	if (msg.stopReason === "error") {
+		const err = msg.errorMessage ?? "";
+		// Permanent errors (auth, quota/billing, bad request) must not be retried.
+		if (/invalid.?api.?key|unauthorized|authentication|permission denied|insufficient_quota|quota exceeded|billing|available balance|monthly usage limit|invalid.?request|400 |401 |403 |404 /i.test(err)) {
+			return false;
+		}
+		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay|status code/i.test(err);
+	}
+	// Empty turn: clean stop but no tool call, no text, zero output tokens.
+	if (msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== null) return false;
+	if (hasToolCall || hasText) return false;
+	const usage = msg.usage;
+	return !usage || (usage.totalTokens ?? 0) === 0 || (usage.output ?? 0) === 0;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 export function swallowedPrompt(argv: readonly string[]): string | undefined {
 	for (let i = 0; i < argv.length; i++) {
 		const tok = argv[i];
@@ -130,15 +172,36 @@ export default function registerStreamExtension(pi: ExtensionAPI): void {
 		if (active && ctx.mode === "print") {
 			const eaten = swallowedPrompt(process.argv.slice(2));
 			if (eaten !== undefined) {
-				const turnDone = new Promise<void>((resolve) => {
-					const off = pi.on("agent_end", () => {
-						try { off?.(); } catch { /* ignore */ }
-						resolve();
-					});
-				});
 				try {
-					await pi.sendUserMessage(eaten, {});
-					await turnDone;
+					// Drive the recovered turn and retry it if it comes back empty or
+					// with a transient error. This path bypasses Pi's normal print-mode
+					// retry loop (we drive via sendUserMessage from session_start), so a
+					// 429/5xx/empty here would otherwise end the run silently. Awaiting
+					// the whole loop keeps print mode alive until we get a clean turn.
+					for (let attempt = 0; attempt <= RECOVERY_MAX_RETRIES; attempt++) {
+						let last: TurnMessage | undefined;
+						const turnDone = new Promise<void>((resolve) => {
+							const off = pi.on("agent_end", (ev: { messages?: TurnMessage[] }) => {
+								const msgs = ev.messages ?? [];
+								for (let i = msgs.length - 1; i >= 0; i--) {
+									if (msgs[i]?.role === "assistant") { last = msgs[i]; break; }
+								}
+								try { off?.(); } catch { /* ignore */ }
+								resolve();
+							});
+						});
+						if (attempt === 0) {
+							await pi.sendUserMessage(eaten, {});
+						} else {
+							await pi.sendMessage(
+								{ customType: "stream-recover-retry", content: "The previous attempt failed (empty or transient error). Retry and complete the task.", display: false },
+								{ triggerTurn: true, deliverAs: "followUp" },
+							);
+						}
+						await turnDone;
+						if (!shouldRetryRecoveredTurn(last)) break;
+						if (attempt < RECOVERY_MAX_RETRIES) await sleep(RECOVERY_BASE_DELAY_MS * 2 ** attempt);
+					}
 				} catch {
 					// If injection fails, fall back to a usage hint so the run isn't silent.
 					out(
