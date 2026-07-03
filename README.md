@@ -8,23 +8,25 @@ pi -p "your prompt here" --stream
 
 Runs the turn non-interactively and streams it as it plays out — thinking
 deltas, text deltas, and tool activity — as plain text, with no TUI and no JSON
-envelope. It's the flag form of the standalone `pi-stream.mjs` runner.
+envelope.
 
-## Usage — put the prompt BEFORE the flag
+## How it works — a wrapper over `pi --mode json -p`
+
+`--stream` does **not** drive the turn itself. It intercepts the prompt and
+spawns a child `pi --mode json -p "<prompt>"` (inheriting your model/flags),
+pretty-prints the child's JSON event stream, and returns `handled` so Pi's own
+turn doesn't also run. The child uses Pi's real print-mode path, so prompt
+handling, the retry loop (429/5xx/empty/transient), and compaction are exactly
+what a normal `pi -p` run gets — no reimplemented (and subtly broken) turn
+lifecycle inside the extension.
+
+## Usage
 
 ```bash
-pi -p "your prompt here" --stream      # recommended
-```
-
-Pi's argument parser runs before extensions load and treats `--stream` followed
-by a bare word as taking that word for its value, so `pi --stream "your prompt"`
-would swallow the prompt and leave the turn with nothing to do. Put the prompt
-first (or pipe it) and it always works:
-
-```bash
-pi -p "explain this repo" --stream
-echo "explain this repo" | pi --stream         # stdin ⇒ print mode
-pi -p "..." --stream | less -R                 # keep ANSI colors in a pager
+pi -p "explain this repo" --stream      # recommended
+pi --stream "explain this repo"         # also works (prompt recovered from argv)
+echo "explain this repo" | pi --stream  # piped stdin
+pi -p "..." --stream | less -R           # keep ANSI colors in a pager
 ```
 
 ## Install

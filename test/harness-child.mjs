@@ -1,41 +1,37 @@
-// Child harness: loads the real extension, drives it with synthetic events for
-// one scenario, and lets it write to real fd 1 (this process's stdout). The
-// parent test captures stdout and asserts. Scenario is argv[2] (JSON).
+// Child harness: drives the REAL renderer (makeRenderer) with synthetic JSON
+// events for one scenario, letting it write to real fd 1 (this process's
+// stdout). The parent test captures stdout and asserts. This exercises the
+// production fs.writeSync(1, ...) render path — the same one the --stream
+// wrapper uses on the child's JSON stream — with no LLM and no subprocess.
 //
-// This exercises the production fs.writeSync(1, ...) path against real fd 1 —
-// the same channel the harness reserves for stdout — with no LLM.
+// Scenario events use the flat JSON-line shape the child emits, e.g.
+//   { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hi" } }
+//   { type: "tool_execution_start", toolName: "bash", args: {...} }
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const mod = await import(path.join(here, "..", "src", "extension.ts"));
-const register = mod.default;
+const { makeRenderer } = mod;
 
-// Scenario comes from a file (argv[3] === "--file") to avoid argv size limits on
-// large stress scenarios, or inline via argv[2] for small ones.
 const scenario = process.argv[3] === "--file"
 	? JSON.parse(fs.readFileSync(process.argv[2], "utf-8"))
 	: JSON.parse(process.argv[2] ?? "{}");
-const { hasUI = false, mode = "print", flag = true, events = [] } = scenario;
+const { flag = true, events = [] } = scenario;
 
-const handlers = new Map();
-let lastMessageEndResult;
-const pi = {
-  registerFlag() {},
-  getFlag() { return flag; },
-  on(event, handler) { handlers.set(event, handler); },
-};
-register(pi);
-const ctx = { hasUI, mode };
-
-for (const ev of events) {
-  const res = handlers.get(ev.type)?.(ev.payload ?? {}, ctx);
-  if (ev.type === "message_end") lastMessageEndResult = res;
+// When the flag is off, the wrapper renders nothing — model this by not
+// rendering at all (the wrapper simply wouldn't spawn/render).
+// Accept both the flat JSON-line shape ({ type, assistantMessageEvent }) and the
+// legacy nested shape ({ type, payload: {...} }); flatten the latter. Non-render
+// events (session_start, message_end) are ignored by the renderer.
+function normalize(ev) {
+	if (ev && ev.payload && typeof ev.payload === "object") return { type: ev.type, ...ev.payload };
+	return ev;
 }
 
-// Emit the message_end result (if any) to fd 2 as JSON so the parent can assert
-// suppression without polluting the captured stdout.
-if (lastMessageEndResult !== undefined) {
-  process.stderr.write("__MSGEND__" + JSON.stringify(lastMessageEndResult) + "\n");
+if (flag) {
+	const renderer = makeRenderer();
+	for (const ev of events) renderer.event(normalize(ev));
+	renderer.finish();
 }
