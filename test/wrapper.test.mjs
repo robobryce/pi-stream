@@ -56,3 +56,9 @@ test("buildChildArgs: passes through -e / arbitrary flags", () => {
 	const out = buildChildArgs(argv, "PROMPT", undefined);
 	assert.ok(out.includes("-e") && out.includes("/path/ext.ts") && out.includes("--no-extensions"));
 });
+
+// Note: runChild's error-exit + child-kill are integration behaviors verified
+// live (forced-error → nonzero exit; SIGTERM → child killed via process signal
+// handlers). They aren't unit-tested here because they require a real subprocess
+// and signal delivery; buildChildArgs/flagOn/swallowedPrompt above cover the
+// pure logic.

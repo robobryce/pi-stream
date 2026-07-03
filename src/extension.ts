@@ -150,16 +150,41 @@ function runChild(childArgs: string[]): Promise<number> {
 			env: { ...process.env, [CHILD_GUARD]: "1" },
 			stdio: ["ignore", "pipe", "inherit"],
 		});
+
+		// Kill the child if we're signalled, so a Ctrl-C / terminated parent never
+		// leaves an orphaned `pi --mode json -p` running.
+		const killChild = () => { try { child.kill("SIGTERM"); } catch { /* gone */ } };
+		const onSig = (sig: NodeJS.Signals) => { killChild(); process.exitCode = 130; process.off(sig, onSig as never); };
+		process.once("SIGINT", onSig);
+		process.once("SIGTERM", onSig);
+		process.once("exit", killChild);
+
+		// `pi --mode json -p` exits 0 even when the turn ends in an error, so we
+		// track a final assistant error in the JSON stream and surface it as a
+		// non-zero exit (matching `pi -p` text-mode semantics).
+		let sawError = false;
 		const renderer = makeRenderer();
 		const rl = readline.createInterface({ input: child.stdout! });
 		rl.on("line", (line) => {
 			if (!line.trim()) return;
-			let ev: unknown;
+			let ev: { type?: string; message?: { role?: string; stopReason?: string } } | undefined;
 			try { ev = JSON.parse(line); } catch { return; }
+			if (ev?.type === "message_end" && ev.message?.role === "assistant") {
+				sawError = ev.message.stopReason === "error";
+			}
 			renderer.event(ev as never);
 		});
-		child.on("close", (code) => { renderer.finish(); resolve(code ?? 0); });
-		child.on("error", () => { resolve(1); });
+		const cleanup = () => {
+			process.off("SIGINT", onSig as never);
+			process.off("SIGTERM", onSig as never);
+			process.off("exit", killChild);
+		};
+		child.on("close", (code) => {
+			renderer.finish();
+			cleanup();
+			resolve(code && code !== 0 ? code : (sawError ? 1 : 0));
+		});
+		child.on("error", () => { cleanup(); resolve(1); });
 	});
 }
 
