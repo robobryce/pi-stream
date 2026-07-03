@@ -113,23 +113,39 @@ export default function registerStreamExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	pi.on("session_start", (_event, ctx: ExtensionContext) => {
+	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		active = flagOn(pi.getFlag(FLAG)) && !ctx.hasUI;
 		suppressFinalEcho = active && ctx.mode === "print";
 		inThinking = false;
 		wroteAnything = false;
 
-		// If `--stream` swallowed the prompt (flag-first with a space), the turn has
-		// nothing to run and Pi exits immediately with no output. We can't recover
-		// the prompt from an extension, but we can turn a silent no-op exit into a
-		// one-line usage hint so the mistake is obvious.
-		if (active) {
+		// Recover a swallowed prompt. When invoked flag-first (`pi --stream "prompt"`),
+		// Pi's arg parser — which runs before extensions and doesn't know --stream is
+		// boolean — consumes the following bare word as the flag's value, so print
+		// mode gets NO prompt and exits immediately with no output. The eaten word is
+		// still in argv, so we recover it, inject it as the user message, and await
+		// the turn here (session_start handlers are awaited in print mode) so the
+		// process doesn't tear down before the turn we started completes. This makes
+		// the flag-first form Just Work instead of silently doing nothing.
+		if (active && ctx.mode === "print") {
 			const eaten = swallowedPrompt(process.argv.slice(2));
 			if (eaten !== undefined) {
-				out(
-					`${DIM}pi-stream: \`--stream\` consumed "${eaten}" as its value, leaving no prompt to run.\n` +
-					`Put the prompt BEFORE the flag: pi -p "${eaten}" --stream${RESET}\n`,
-				);
+				const turnDone = new Promise<void>((resolve) => {
+					const off = pi.on("agent_end", () => {
+						try { off?.(); } catch { /* ignore */ }
+						resolve();
+					});
+				});
+				try {
+					await pi.sendUserMessage(eaten, {});
+					await turnDone;
+				} catch {
+					// If injection fails, fall back to a usage hint so the run isn't silent.
+					out(
+						`${DIM}pi-stream: \`--stream\` consumed "${eaten}" as its value and could not recover it.\n` +
+						`Put the prompt BEFORE the flag: pi -p "${eaten}" --stream${RESET}\n`,
+					);
+				}
 			}
 		}
 	});
