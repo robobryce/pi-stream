@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pi requires Node >=22.19.0.
+        node: ["22", "24"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Expose pi on PATH
+        run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Show pi version
+        run: pi --version
+
+      - name: Type-check extension
+        run: npm run typecheck
+
+      - name: Run test suite
+        run: npm test
+        env:
+          PI_OFFLINE: "1"

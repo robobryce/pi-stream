@@ -5,7 +5,12 @@
   "author": "Bryce Adelstein Lelbach",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
     "test": "node --experimental-strip-types --test test/*.test.mjs"
   },
   "repository": {
@@ -49,6 +54,8 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "0.80.2",
+    "@types/node": "^22",
+    "typescript": "^5.6"
   }
 }
