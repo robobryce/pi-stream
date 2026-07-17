@@ -1,4 +1,4 @@
-# pi-stream
+# pi-print-stream
 
 A Pi extension that adds a **`--stream`** CLI flag.
 
@@ -32,7 +32,7 @@ pi -p "..." --stream | less -R           # keep ANSI colors in a pager
 ## Install
 
 ```bash
-pi install git:github.com/robobryce/pi-stream
+pi install npm:pi-print-stream
 ```
 
 or, for local development:

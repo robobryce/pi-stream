@@ -1,5 +1,5 @@
 {
-  "name": "pi-stream",
+  "name": "pi-print-stream",
   "version": "0.1.0",
   "description": "Pi extension adding a --stream flag: run non-interactively and stream the turn (thinking, text, and tool activity) to stdout as it happens — no TUI, no JSON.",
   "author": "Bryce Adelstein Lelbach",
@@ -15,11 +15,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/robobryce/pi-stream.git"
+    "url": "git+https://github.com/robobryce/pi-print-stream.git"
   },
-  "homepage": "https://github.com/robobryce/pi-stream#readme",
+  "homepage": "https://github.com/robobryce/pi-print-stream#readme",
   "bugs": {
-    "url": "https://github.com/robobryce/pi-stream/issues"
+    "url": "https://github.com/robobryce/pi-print-stream/issues"
   },
   "keywords": [
     "pi-package",

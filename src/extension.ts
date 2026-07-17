@@ -1,5 +1,5 @@
 /**
- * pi-stream — a `--stream` CLI flag that streams a non-interactive turn to
+ * pi-print-stream — a `--stream` CLI flag that streams a non-interactive turn to
  * stdout as plain text (thinking, text, and tool activity), no TUI, no JSON.
  *
  * Architecture: WRAPPER over `pi --mode json -p`
